@@ -5,14 +5,6 @@
 use std::collections::VecDeque;
 use std::fs;
 
-struct Computer {
-    memory: Vec<i32>,
-    ip: i32,
-    halted: bool,
-    inputs: VecDeque<i32>,
-    outputs: Vec<i32>,
-}
-
 const ADDR_NOUN: i32 = 1;
 const ADDR_VERB: i32 = 2;
 
@@ -25,6 +17,12 @@ const OP_JUMP_IF_FALSE: i32 = 6;
 const OP_LESS_THAN: i32 = 7;
 const OP_EQUALS: i32 = 8;
 const OP_HALT: i32 = 99;
+
+const OP_PARAMETER_BASE: i32 = 10;
+const OP_PARAMETER_BASE_POS: u32 = 3;
+
+const PARAM_TYPE_POSITION: i32 = 0;
+const PARAM_TYPE_IMMEDIATE: i32 = 1;
 
 enum Op {
     Add(Parameter, Parameter, Parameter),
@@ -44,29 +42,44 @@ enum Parameter {
 }
 use Parameter::*;
 
-const PARAMETER_BASE: i32 = 10;
-const PARAMETER_BASE_POS: u32 = 3;
-const PARAM_POSITION: i32 = 0;
-const PARAM_IMMEDIATE: i32 = 1;
+/// Decodes opcode words.
+///
+/// To decode, regard the word as a base-10 number. The 2 least
+/// significant digits encode the operator type. The remaining digits
+/// encode the types of the parameters: the 3rd least sigificant digit
+/// for first parameter, the 4th for the second, etc.
+///
+/// Note that leading zeroes are implied if the decimal representation
+/// has fewer digits than required.
+///
+/// # Example
+///
+///   1002
+///  |||||
+///  |||||
+///  |||++- Op type = 02 (OP_MUL)
+///  ||+--- Param 0 type = 0 (PARAM_TYPE_POSTIION)
+///  |+---- Param 1 type = 1 (PARAM_TYPE_IMMEDIATE)
+///  +----- Param 2 type = 0 (PARAM_TYPE_POSITION)
+struct OpDecoder(i32);
 
-impl Parameter {
-    fn deref(&self, computer: &Computer) -> i32 {
-        match self {
-            Position(p) => computer.read(*p),
-            Immediate(n) => *n,
-        }
+impl OpDecoder {
+    fn opcode(&self) -> i32 {
+        self.0 % OP_PARAMETER_BASE.pow(OP_PARAMETER_BASE_POS - 1)
     }
 
-    fn read_and_advance(computer: &mut Computer, opcode: i32, argno: u32) -> Parameter {
-        let value = computer.read_and_advance();
-        match opcode % (PARAMETER_BASE.pow(argno + PARAMETER_BASE_POS))
-            / PARAMETER_BASE.pow(argno + PARAMETER_BASE_POS - 1)
-        {
-            PARAM_POSITION => Position(value),
-            PARAM_IMMEDIATE => Immediate(value),
-            x => panic!("Unknown parameter type {x}"),
-        }
+    fn param_type(&self, argno: u32) -> i32 {
+        self.0 % (OP_PARAMETER_BASE.pow(argno + OP_PARAMETER_BASE_POS))
+            / OP_PARAMETER_BASE.pow(argno + OP_PARAMETER_BASE_POS - 1)
     }
+}
+
+struct Computer {
+    memory: Vec<i32>,
+    ip: i32,
+    halted: bool,
+    inputs: VecDeque<i32>,
+    outputs: Vec<i32>,
 }
 
 impl Computer {
@@ -84,8 +97,8 @@ impl Computer {
     where
         F: FnOnce(i32, i32) -> i32,
     {
-        let a = pa.deref(&self);
-        let b = pb.deref(&self);
+        let a = self.deref(&pa);
+        let b = self.deref(&pb);
         let c = f(a, b);
 
         if let Position(p) = pc {
@@ -102,6 +115,13 @@ impl Computer {
         while !self.halted {
             let op = self.read_next_instruction();
             self.execute(op);
+        }
+    }
+
+    fn deref(&self, param: &Parameter) -> i32 {
+        match param {
+            Position(p) => self.read(*p),
+            Immediate(n) => *n,
         }
     }
 
@@ -122,17 +142,17 @@ impl Computer {
     }
 
     fn jump_if_false(&mut self, pa: Parameter, pb: Parameter) {
-        let cond = pa.deref(self);
+        let cond = self.deref(&pa);
         if cond == 0 {
-            let addr = pb.deref(self);
+            let addr = self.deref(&pb);
             self.ip = addr;
         }
     }
 
     fn jump_if_true(&mut self, pa: Parameter, pb: Parameter) {
-        let cond = pa.deref(self);
+        let cond = self.deref(&pa);
         if cond != 0 {
-            let addr = pb.deref(self);
+            let addr = self.deref(&pb);
             self.ip = addr;
         }
     }
@@ -142,7 +162,20 @@ impl Computer {
         *self.memory.get(p as usize).unwrap()
     }
 
-    fn read_and_advance(&mut self) -> i32 {
+    fn read_op_and_advance(&mut self) -> OpDecoder {
+        OpDecoder(self.read_word_and_advance())
+    }
+
+    fn read_param_and_advance(&mut self, param_type: i32) -> Parameter {
+        let value = self.read_word_and_advance();
+        match param_type {
+            PARAM_TYPE_POSITION => Position(value),
+            PARAM_TYPE_IMMEDIATE => Immediate(value),
+            x => panic!("Unknown parameter type {x}"),
+        }
+    }
+
+    fn read_word_and_advance(&mut self) -> i32 {
         let n = self.read(self.ip);
         self.ip += 1;
         n
@@ -153,38 +186,37 @@ impl Computer {
     }
 
     fn read_next_instruction(&mut self) -> Op {
-        let opcode = self.read_and_advance();
-        match opcode % 100 {
-            OP_ADD => Op::Add(
-                Parameter::read_and_advance(self, opcode, 0),
-                Parameter::read_and_advance(self, opcode, 1),
-                Parameter::read_and_advance(self, opcode, 2),
-            ),
-            OP_MUL => Op::Mul(
-                Parameter::read_and_advance(self, opcode, 0),
-                Parameter::read_and_advance(self, opcode, 1),
-                Parameter::read_and_advance(self, opcode, 2),
-            ),
-            OP_STORE_INPUT => Op::StoreInput(Parameter::read_and_advance(self, opcode, 0)),
-            OP_WRITE_OUTPUT => Op::WriteOutput(Parameter::read_and_advance(self, opcode, 0)),
-            OP_JUMP_IF_TRUE => Op::JumpIfTrue(
-                Parameter::read_and_advance(self, opcode, 0),
-                Parameter::read_and_advance(self, opcode, 1),
-            ),
-            OP_JUMP_IF_FALSE => Op::JumpIfFalse(
-                Parameter::read_and_advance(self, opcode, 0),
-                Parameter::read_and_advance(self, opcode, 1),
-            ),
-            OP_LESS_THAN => Op::LessThan(
-                Parameter::read_and_advance(self, opcode, 0),
-                Parameter::read_and_advance(self, opcode, 1),
-                Parameter::read_and_advance(self, opcode, 2),
-            ),
-            OP_EQUALS => Op::Equals(
-                Parameter::read_and_advance(self, opcode, 0),
-                Parameter::read_and_advance(self, opcode, 1),
-                Parameter::read_and_advance(self, opcode, 2),
-            ),
+        let op = self.read_op_and_advance();
+
+        macro_rules! op_read_params_inner {
+            ($enum:ident, $($argno:expr),*) => {
+                Op::$enum(
+                    $(self.read_param_and_advance(op.param_type($argno))),*
+                )
+            }
+        }
+
+        macro_rules! op_read_params {
+            ($enum:ident, 1) => {
+                op_read_params_inner!($enum, 0)
+            };
+            ($enum:ident, 2) => {
+                op_read_params_inner!($enum, 0, 1)
+            };
+            ($enum:ident, 3) => {
+                op_read_params_inner!($enum, 0, 1, 2)
+            };
+        }
+
+        match op.opcode() {
+            OP_ADD => op_read_params!(Add, 3),
+            OP_MUL => op_read_params!(Mul, 3),
+            OP_STORE_INPUT => op_read_params!(StoreInput, 1),
+            OP_WRITE_OUTPUT => op_read_params!(WriteOutput, 1),
+            OP_JUMP_IF_TRUE => op_read_params!(JumpIfTrue, 2),
+            OP_JUMP_IF_FALSE => op_read_params!(JumpIfFalse, 2),
+            OP_LESS_THAN => op_read_params!(LessThan, 3),
+            OP_EQUALS => op_read_params!(Equals, 3),
             OP_HALT => Op::Halt,
             x => panic!("Unknown opcode {x}"),
         }
@@ -221,7 +253,7 @@ impl Computer {
     }
 
     fn write_output(&mut self, pa: Parameter) {
-        let value = pa.deref(self);
+        let value = self.deref(&pa);
         self.outputs.push(value);
     }
 }
