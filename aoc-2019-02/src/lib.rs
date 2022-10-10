@@ -3,32 +3,32 @@
 use std::fs;
 
 struct Computer {
-    memory: Vec<usize>,
-    ip: usize,
+    memory: Vec<i32>,
+    ip: i32,
     halted: bool,
 }
 
-const ADDR_NOUN: usize = 1;
-const ADDR_VERB: usize = 2;
+const ADDR_NOUN: i32 = 1;
+const ADDR_VERB: i32 = 2;
 
-const OP_ADD: usize = 1;
-const OP_MUL: usize = 2;
-const OP_HALT: usize = 99;
+const OP_ADD: i32 = 1;
+const OP_MUL: i32 = 2;
+const OP_HALT: i32 = 99;
 
 enum Op {
-    Add(usize, usize, usize),
-    Mul(usize, usize, usize),
+    Add(i32, i32, i32),
+    Mul(i32, i32, i32),
     Halt
 }
 
 impl Computer {
-    fn new(memory: Vec<usize>) -> Self {
+    fn new(memory: Vec<i32>) -> Self {
         Computer { memory, ip: 0, halted: false }
     }
 
-    fn binary_op<F>(&mut self, pa: usize, pb: usize, pc: usize, f: F)
+    fn binary_op<F>(&mut self, pa: i32, pb: i32, pc: i32, f: F)
     where
-        F: FnOnce(usize, usize) -> usize
+        F: FnOnce(i32, i32) -> i32
     {
         let a = self.read(pa);
         let b = self.read(pb);
@@ -54,11 +54,12 @@ impl Computer {
         }
     }
 
-    fn read(&self, p: usize) -> usize {
-        *self.memory.get(p).unwrap()
+    fn read(&self, p: i32) -> i32 {
+        assert!(p >= 0);
+        *self.memory.get(p as usize).unwrap()
     }
 
-    fn read_and_advance(&mut self) -> usize {
+    fn read_and_advance(&mut self) -> i32 {
         let n = self.read(self.ip);
         self.ip += 1;
         n
@@ -74,18 +75,19 @@ impl Computer {
         }
     }
 
-    fn restore_state(&mut self, noun: usize, verb: usize) {
+    fn restore_state(&mut self, noun: i32, verb: i32) {
         self.write(ADDR_NOUN, noun);
         self.write(ADDR_VERB, verb);
     }
 
-    fn result(&self) -> usize {
+    fn result(&self) -> i32 {
         assert!(self.halted);
         self.read(0)
     }
 
-    fn write(&mut self, p: usize, n: usize) {
-        let p = self.memory.get_mut(p).unwrap();
+    fn write(&mut self, p: i32, n: i32) {
+        assert!(p >= 0);
+        let p = self.memory.get_mut(p as usize).unwrap();
         *p = n;
     }
 }
@@ -94,18 +96,18 @@ pub fn input() -> String {
     fs::read_to_string("input.txt").expect("Can't find input.txt")
 }
 
-fn initial_state() -> Vec<usize> {
+fn initial_state() -> Vec<i32> {
     input().trim().split(",").map(|s| s.parse().unwrap()).collect()
 }
 
-pub fn part1() -> usize {
+pub fn part1() -> i32 {
     let mut computer = Computer::new(initial_state());
     computer.restore_state(12, 2);
     computer.compute();
     computer.result()
 }
 
-pub fn part2() -> usize {
+pub fn part2() -> i32 {
     let target_output = 19690720;
     let initial = initial_state();
 
@@ -126,7 +128,7 @@ pub fn part2() -> usize {
 mod test {
     use super::*;
 
-    fn compute(memory: Vec<usize>) -> Vec<usize> {
+    fn compute(memory: Vec<i32>) -> Vec<i32> {
         let mut computer = Computer::new(memory);
         computer.compute();
         computer.memory
