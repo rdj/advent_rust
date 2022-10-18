@@ -104,12 +104,7 @@ impl BodySystem {
 
     fn steps_until_cycle(&mut self) -> i64 {
         let cycles = self.step_until_components_cycle();
-
-        let mut lcm: i64 = 1;
-        for i in 0..3 {
-            lcm = lcm.lcm(&cycles[i]);
-        }
-        lcm
+        cycles.into_iter().reduce(|a, b| a.lcm(&b)).unwrap()
     }
 
     fn step(&mut self) {
