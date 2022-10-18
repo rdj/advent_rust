@@ -2,27 +2,28 @@
 
 #![allow(dead_code)]
 
-type AdventResult = i32;
+type AdventResult = i64;
 
 use std::fs;
 
+use num::Integer;
 use regex::Regex;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Body {
-    position: [i32; 3],
-    velocity: [i32; 3],
+    position: [i64; 3],
+    velocity: [i64; 3],
 }
 
 impl Body {
-    fn new(position: [i32; 3]) -> Self {
+    fn new(position: [i64; 3]) -> Self {
         Body {
             position,
             velocity: [0; 3],
         }
     }
 
-    fn apply_gravity(&mut self, other_pos: [i32; 3]) {
+    fn apply_gravity(&mut self, other_pos: [i64; 3]) {
         for i in 0..3 {
             if self.position[i] > other_pos[i] {
                 self.velocity[i] -= 1;
@@ -38,35 +39,77 @@ impl Body {
         }
     }
 
-    fn kinetic_energy(&self) -> i32 {
+    fn kinetic_energy(&self) -> i64 {
         self.velocity.iter().map(|n| n.abs()).sum()
     }
 
-    fn potential_energy(&self) -> i32 {
+    fn potential_energy(&self) -> i64 {
         self.position.iter().map(|n| n.abs()).sum()
     }
 
-    fn total_energy(&self) -> i32 {
+    fn total_energy(&self) -> i64 {
         self.kinetic_energy() * self.potential_energy()
     }
 }
 
 struct BodySystem {
+    step_number: i64,
     bodies: Vec<Body>,
+    initial_state: Vec<Body>,
 }
 
 impl BodySystem {
-    fn new(bodies: Vec<[i32; 3]>) -> Self {
+    fn new(bodies: Vec<[i64; 3]>) -> Self {
+        let bodies: Vec<_> = bodies.into_iter().map(|a| Body::new(a)).collect();
+        let initial_state = bodies.clone();
+
         BodySystem {
-            bodies: bodies.into_iter().map(|a| Body::new(a)).collect(),
+            bodies,
+            initial_state,
+            step_number: 0,
         }
     }
-    
+
     fn apply_gravity(&mut self, ai: usize, bi: usize) {
         let bpos = self.bodies.get(bi).unwrap().position;
-        self.bodies.get_mut(ai).unwrap().apply_gravity(
-            bpos
-        );
+        self.bodies.get_mut(ai).unwrap().apply_gravity(bpos);
+    }
+
+    fn step_until_components_cycle(&mut self) -> [i64; 3] {
+        assert_eq!(0, self.step_number);
+
+        let mut cycles = [0; 3];
+
+        while cycles.iter().any(|n| *n == 0) {
+            self.step();
+
+            for d in 0..3 {
+                if cycles[d] != 0 {
+                    continue;
+                }
+
+                if self
+                    .bodies
+                    .iter()
+                    .zip(self.initial_state.iter())
+                    .all(|(a, b)| a.position[d] == b.position[d] && a.velocity[d] == b.velocity[d])
+                {
+                    cycles[d] = self.step_number;
+                }
+            }
+        }
+
+        cycles
+    }
+
+    fn steps_until_cycle(&mut self) -> i64 {
+        let cycles = self.step_until_components_cycle();
+
+        let mut lcm: i64 = 1;
+        for i in 0..3 {
+            lcm = lcm.lcm(&cycles[i]);
+        }
+        lcm
     }
 
     fn step(&mut self) {
@@ -80,9 +123,11 @@ impl BodySystem {
         for b in &mut self.bodies {
             b.apply_velocity();
         }
+
+        self.step_number += 1;
     }
 
-    fn total_energy(&self) -> i32 {
+    fn total_energy(&self) -> i64 {
         self.bodies.iter().map(|b| b.total_energy()).sum()
     }
 }
@@ -91,7 +136,7 @@ pub fn input() -> String {
     fs::read_to_string("input.txt").expect("Can't find input.txt")
 }
 
-fn parse_input(input: &str) -> Vec<[i32; 3]> {
+fn parse_input(input: &str) -> Vec<[i64; 3]> {
     let mut v = vec![];
 
     let re = Regex::new(r"\A<x=(.*?), y=(.*?), z=(.*?)>\z").unwrap();
@@ -101,7 +146,7 @@ fn parse_input(input: &str) -> Vec<[i32; 3]> {
         v.push([
             cap[1].parse().unwrap(),
             cap[2].parse().unwrap(),
-            cap[3].parse().unwrap()
+            cap[3].parse().unwrap(),
         ]);
     }
 
@@ -117,7 +162,8 @@ pub fn part1() -> AdventResult {
 }
 
 pub fn part2() -> AdventResult {
-    0
+    let mut system = BodySystem::new(parse_input(&input()));
+    system.steps_until_cycle()
 }
 
 #[cfg(test)]
@@ -131,12 +177,10 @@ mod test {
 <x=2, y=-10, z=-7>
 <x=4, y=-8, z=8>
 <x=3, y=5, z=-1>";
-        assert_eq!(vec![
-            [-1, 0, 2],
-            [2, -10, -7],
-            [4, -8, 8],
-            [3, 5, -1],
-        ], parse_input(input));
+        assert_eq!(
+            vec![[-1, 0, 2], [2, -10, -7], [4, -8, 8], [3, 5, -1],],
+            parse_input(input)
+        );
     }
 
     #[test]
@@ -176,7 +220,7 @@ Body { position: [2, 0, 4], velocity: [1, -1, -1] }]";
 <x=2, y=-7, z=3>
 <x=9, y=-8, z=-3>";
         let mut system = BodySystem::new(parse_input(input));
-        for _ in 0..10 { 
+        for _ in 0..10 {
             system.step();
         }
         let expected = "[\
@@ -200,10 +244,27 @@ Body { position: [16, -13, 23], velocity: [7, 1, 1] }]";
     }
 
     #[test]
-    fn part2_example() {
-        panic!("part 2 example");
+    fn part2_example1() {
+        let input = "\
+<x=-1, y=0, z=2>
+<x=2, y=-10, z=-7>
+<x=4, y=-8, z=8>
+<x=3, y=5, z=-1>";
+        let mut system = BodySystem::new(parse_input(input));
+        assert_eq!(2772, system.steps_until_cycle());
     }
-    
+
+    #[test]
+    fn part2_example2() {
+        let input = "\
+<x=-8, y=-10, z=0>
+<x=5, y=5, z=10>
+<x=2, y=-7, z=3>
+<x=9, y=-8, z=-3>";
+        let mut system = BodySystem::new(parse_input(input));
+        assert_eq!(4686774924, system.steps_until_cycle());
+    }
+
     #[test]
     fn part1_solution() {
         assert_eq!(7202, part1());
@@ -211,6 +272,6 @@ Body { position: [16, -13, 23], velocity: [7, 1, 1] }]";
 
     #[test]
     fn part2_solution() {
-        assert_eq!(AdventResult::MAX, part2());
+        assert_eq!(537881600740876, part2());
     }
 }
