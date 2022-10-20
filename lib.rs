@@ -1,19 +1,27 @@
-// -*- compile-command: "cargo test -- --show-output" -*-
+#![allow(dead_code, unused_variables)]
 
 type AdventResult = usize;
 
 use std::fs;
 
-pub fn input() -> String {
+fn input() -> String {
     fs::read_to_string("input.txt").expect("Can't find input.txt")
 }
 
-pub fn part1() -> AdventResult {
-    0
+fn do_part1(input: &str) -> AdventResult {
+    todo!()
 }
 
-pub fn part2() -> AdventResult {
-    0
+fn do_part2(input: &str) -> AdventResult {
+    todo!()
+}
+
+fn part1() -> AdventResult {
+    do_part1(&input())
+}
+
+fn part2() -> AdventResult {
+    do_part2(&input())
 }
 
 #[cfg(test)]
@@ -22,12 +30,12 @@ mod test {
 
     #[test]
     fn part1_example() {
-        panic!("part 1 example");
+        todo!()
     }
 
     #[test]
     fn part2_example() {
-        panic!("part 2 example");
+        todo!()
     }
     
     #[test]
