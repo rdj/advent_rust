@@ -7,9 +7,10 @@ mod computer;
 use computer::Computer;
 use computer::Intcode;
 
+use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
-use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::fs;
 use std::ops::RangeInclusive;
 
@@ -21,10 +22,9 @@ struct Position(Coordinate, Coordinate);
 
 impl Position {
     fn manhattan(&self, other: &Position) -> u32 {
-        (self.0 - other.0).abs() as u32 + 
-            (self.1 - other.1).abs() as u32
+        (self.0 - other.0).abs() as u32 + (self.1 - other.1).abs() as u32
     }
-    
+
     fn max(&self, other: &Position) -> Position {
         Position(self.0.max(other.0), self.1.max(other.1))
     }
@@ -55,20 +55,19 @@ impl<'a> PartialOrd for PartialPath<'a> {
 }
 
 impl<'a> Ord for PartialPath<'a> {
+    // compares opposite natural ordering because lower cost = higher
+    // priority for the queue
     fn cmp(&self, other: &Self) -> Ordering {
-        self.min_cost_to_goal().cmp(&other.min_cost_to_goal())
+        other.min_cost_to_goal().cmp(&self.min_cost_to_goal())
     }
 }
 
 impl<'a> PartialPath<'a> {
-    fn new(maze: &'a Maze) -> Self {
-        let path = vec![Position(0, 0)];
-        PartialPath {
-            path,
-            maze
-        }
+    fn new(maze: &'a Maze, pos: Position) -> Self {
+        let path = vec![pos];
+        PartialPath { path, maze }
     }
-    
+
     fn branch(&self, p: Position) -> Self {
         let mut path = self.path.clone();
         path.push(p);
@@ -78,9 +77,13 @@ impl<'a> PartialPath<'a> {
         }
     }
 
+    fn cost(&self) -> usize {
+        self.len() - 1
+    }
+
     fn min_cost_to_goal(&self) -> u32 {
         let p = self.path.last().unwrap();
-        p.manhattan(&self.maze.goal)
+        self.cost() as u32 + p.manhattan(&self.maze.goal)
     }
 }
 
@@ -93,7 +96,6 @@ impl<'a> Deref for PartialPath<'a> {
         &self.path
     }
 }
-
 
 #[derive(Clone, Copy)]
 enum Direction {
@@ -212,8 +214,12 @@ impl Maze {
     }
 
     fn shortest_path(&self) -> usize {
+        self.shortest_path_from(Position(0, 0)).cost()
+    }
+
+    fn shortest_path_from(&self, p: Position) -> PartialPath {
         let mut paths = BinaryHeap::new();
-        paths.push(PartialPath::new(self));
+        paths.push(PartialPath::new(self, p));
 
         while let Some(path) = paths.pop() {
             let pos = *path.last().unwrap();
@@ -222,11 +228,11 @@ impl Maze {
                 if path.contains(&next) {
                     continue;
                 }
+
                 match self.map.get(&next).unwrap() {
-                    Oxygen => return path.len(),
+                    Oxygen => return path.branch(next),
                     Wall => continue,
-                    Empty => paths.push(path.branch(next)),
-                    Origin => panic!("should not return to origin"),
+                    Empty | Origin => paths.push(path.branch(next)),
                 }
             }
         }
@@ -316,7 +322,29 @@ fn do_part1(input: &str) -> AdventResult {
 }
 
 fn do_part2(input: &str) -> AdventResult {
-    todo!()
+    let maze = MazeMapper::build_maze(input);
+
+    let mut seen = HashSet::new();
+
+    let mut longest = None;
+    for (pos, _) in maze.map.iter().filter(|(p, &t)| t == Empty) {
+        if seen.contains(pos) {
+            continue;
+        }
+
+        let len = maze.shortest_path_from(*pos);
+
+        for &p in len.iter() {
+            seen.insert(p);
+        }
+
+        longest = match longest {
+            None => Some(len),
+            Some(x) if len.cost() > x.cost() => Some(len),
+            x => x,
+        }
+    }
+    longest.unwrap().cost()
 }
 
 fn part1() -> AdventResult {
@@ -332,17 +360,12 @@ mod test {
     use super::*;
 
     #[test]
-    fn part2_example() {
-        todo!()
-    }
-
-    #[test]
     fn part1_solution() {
         assert_eq!(300, part1());
     }
 
     #[test]
     fn part2_solution() {
-        assert_eq!(AdventResult::MAX, part2());
+        assert_eq!(312, part2());
     }
 }
