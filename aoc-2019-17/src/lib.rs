@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), allow(dead_code))]
+
 mod computer;
 use computer::Computer;
 use computer::Intcode;
@@ -6,6 +8,8 @@ type AdventResult = usize;
 
 use std::collections::HashSet;
 use std::fs;
+
+use regex::Regex;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 struct Position(i32, i32);
@@ -90,10 +94,23 @@ enum Turn {
 
 impl Turn {
     const ALL: [Turn; 2] = [Turn::Left, Turn::Right];
+
+    fn to_ascii(&self) -> char {
+        match self {
+            Turn::Left => 'L',
+            Turn::Right => 'R',
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct Move(Turn, u32);
+
+impl Move {
+    fn to_ascii(&self) -> String {
+        format!("{},{}", self.0.to_ascii(), self.1)
+    }
+}
 
 struct Scaffolding {
     locations: HashSet<Position>,
@@ -186,6 +203,87 @@ impl Scaffolding {
 
         moves
     }
+
+    fn program_moves_full(&self) -> String {
+        self.robot_moves()
+            .into_iter()
+            .map(|m| m.to_ascii())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    // Our full program looks something like
+    //   L1,R1,L10,L8,R4,...
+    //
+    // We want to find three subsequences of moves that are repeated
+    // and replace their occurences with A,B,C.
+    //
+    // This is pretty hard in general, but we do have a constraint and
+    // then can make some simplifying assumptions.
+    //
+    // The constraint we're given is that no part of the program can
+    // be longer than 20 characters.
+    //
+    // Our compressed output "A,B,A,C,..." can only have at most 10
+    // ABC symbols in it (need a comma after each). So each ABC needs
+    // to encode a little more than 15.2 characters from the full
+    // program. Our sequences need to be long, then.
+    //
+    // Let's try starting at the beginning of the string and finding
+    // the longest sequence that has a repeat later in the string,
+    // call that A, and then repeat.
+    //
+    // Not the most general solution, but it's scoped enough to be
+    // doable as part2 of this AOC.
+    //
+    fn program_moves_compressed(&self) -> String {
+        // the format! macro only takes a literal string so can't make
+        // the RE template a const
+        const SUBSEQ_MIN_LEN: usize = 3;
+        const SUBSEQ_MAX_LEN: usize = 20;
+        const RE_ANCHOR_COUNT: usize = 2;
+        const REPLACEMENTS: [&str; 3] = ["A", "B", "C"];
+
+        let full_prog = self.program_moves_full();
+        let mut compressed_prog = full_prog.clone();
+        let mut expansions = vec![];
+
+        'abc: for abc in REPLACEMENTS {
+            let mut maxlen = SUBSEQ_MAX_LEN - RE_ANCHOR_COUNT;
+            while maxlen >= SUBSEQ_MIN_LEN {
+                let re = Regex::new(&format!(
+                    "[LR][LR0-9,]{{{},{}}}[0-9],",
+                    SUBSEQ_MIN_LEN, maxlen
+                ))
+                .unwrap();
+                let m = re
+                    .find(&compressed_prog)
+                    .expect("RE should always match something");
+                let subseq_comma = m.as_str();
+                let subseq = &subseq_comma[..subseq_comma.len() - 1];
+                let trial = compressed_prog.replace(subseq, abc);
+                if compressed_prog.len() - trial.len() > subseq.len() {
+                    expansions.push(String::from(subseq));
+                    compressed_prog = trial;
+                    continue 'abc;
+                }
+
+                maxlen = subseq.len() - RE_ANCHOR_COUNT - 1;
+            }
+
+            panic!("failed to find a subseq for {}", abc);
+        }
+
+        compressed_prog += "\n";
+        for ex in &expansions {
+            compressed_prog += ex;
+            compressed_prog += "\n";
+        }
+
+        compressed_prog += "n\n"; // no live camera
+
+        compressed_prog
+    }
 }
 
 fn input() -> String {
@@ -201,11 +299,12 @@ where
         .collect()
 }
 
-fn ascii_to_intcodes(ascii: &str) -> Vec<Intcode>
-{
-    ascii.chars().map(|c| Intcode::from(u8::try_from(c).unwrap())).collect()
+fn ascii_to_intcodes(ascii: &str) -> Vec<Intcode> {
+    ascii
+        .chars()
+        .map(|c| Intcode::from(u8::try_from(c).unwrap()))
+        .collect()
 }
-
 
 fn do_part1(input: &str) -> AdventResult {
     let mut computer = Computer::new(Computer::parse_program(input));
@@ -221,29 +320,12 @@ fn do_part2(input: &str) -> AdventResult {
     computer.start();
     assert!(computer.is_halted());
     let s = Scaffolding::new(&intcodes_to_ascii(computer.consume_output_buffer()));
-    println!("{:?}", s.robot_moves());
 
-    // The resulting move list for my input:
-    //
-    // L,10,R,8,R,6,R,10,L,12,R,8,L,12,L,10,R,8,R,6,R,10,L,12,R,8,L,12,L,10,R,8,R,8,L,10,R,8,R,8,L,12,R,8,L,12,L,10,R,8,R,6,R,10,L,10,R,8,R,8,L,10,R,8,R,6,R,10
-    //
-    // I actually think that greedy subsequences bounded by the 20
-    // character limit will produce the ABC encoding, but since I was
-    // inspecting it anyway to figure out a reasonable strategy I
-    // realized it was trivial to just produce the input program by
-    // hand.
+    let ascii_input = s.program_moves_compressed();
 
     computer = Computer::new(Computer::parse_program(input));
 
-    let ascii_input="\
-A,B,A,B,C,C,B,A,C,A
-L,10,R,8,R,6,R,10
-L,12,R,8,L,12
-L,10,R,8,R,8
-n
-";
-
-    let inputs = ascii_to_intcodes(ascii_input);
+    let inputs = ascii_to_intcodes(&ascii_input);
     for input in inputs {
         computer.buffer_input(input);
     }
@@ -321,6 +403,32 @@ mod test {
         ];
 
         assert_eq!(moves, s.robot_moves());
+
+        let full_prog = "R,8,R,8,R,4,R,4,R,8,L,6,L,2,R,4,R,4,R,8,R,8,R,8,L,6,L,2";
+        assert_eq!(full_prog, s.program_moves_full());
+
+        // My solution produces a different program for the example
+        // than what was given, so instead of comparing I will just
+        // make sure that it follows the rules and expands to the
+        // epxected full program.
+
+        let compressed = s.program_moves_compressed();
+        for line in compressed.lines() {
+            assert!(line.len() <= 20);
+        }
+
+        let mut lines = compressed.lines();
+        let mut main = String::from(lines.next().unwrap());
+        let a = lines.next().unwrap();
+        let b = lines.next().unwrap();
+        let c = lines.next().unwrap();
+        assert_eq!(Some("n"), lines.next());
+        assert_eq!(None, lines.next());
+
+        main = main.replace("A", a);
+        main = main.replace("B", b);
+        main = main.replace("C", c);
+        assert_eq!(main, full_prog);
     }
 
     #[test]
