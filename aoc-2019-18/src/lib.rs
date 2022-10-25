@@ -6,6 +6,7 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::fs;
+use std::ops::Deref;
 
 type Coordinate = usize;
 
@@ -37,100 +38,90 @@ impl Position {
 }
 
 #[derive(Clone)]
-struct PartialPath<'a> {
-    path: Vec<Position>,
-    maze: &'a Maze,
+struct PartialPath {
+    cost: usize,
+    min_remaining: usize,
     keys_acquired: String,
-    next_key: char,
-    backtrack_ok: bool,
 }
 
-impl<'a> PartialEq for PartialPath<'a> {
+impl PartialEq for PartialPath {
     fn eq(&self, other: &Self) -> bool {
-        self.path == other.path
+        self.cost == other.cost
     }
 }
 
-impl<'a> Eq for PartialPath<'a> {}
+impl Eq for PartialPath {}
 
-impl<'a> PartialOrd for PartialPath<'a> {
+impl PartialOrd for PartialPath {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<'a> Ord for PartialPath<'a> {
+impl Ord for PartialPath {
     // compares opposite natural ordering because lower cost = higher
     // priority for the queue
     fn cmp(&self, other: &Self) -> Ordering {
-        other.min_cost_to_goal().cmp(&self.min_cost_to_goal())
+        let c = other.min_cost_to_goal().cmp(&self.min_cost_to_goal());
+        if c == Ordering::Equal {
+            let c = other.cost.cmp(&self.cost);
+            if c == Ordering::Equal {
+                return self.keys_acquired.cmp(&other.keys_acquired);
+            }
+            return c;
+        }
+        return c;
     }
 }
 
-impl<'a> PartialPath<'a> {
-    fn new(maze: &'a Maze, pos: Position, next_key: char) -> Self {
-        let path = vec![pos];
+impl PartialPath {
+    fn new(maze: &Maze) -> Self {
+        let min_remaining = maze
+            .keys
+            .iter()
+            .map(|(_, pos)| maze.origin.manhattan(pos))
+            .max()
+            .unwrap();
         PartialPath {
-            path,
-            maze,
-            next_key,
+            min_remaining,
             keys_acquired: String::new(),
-            backtrack_ok: false,
+            cost: 0,
         }
     }
 
-    fn branch(&self, p: Position) -> Self {
-        let mut path = self.path.clone();
-        path.push(p);
+    fn branch(&self, key: char, marginal_cost: usize, maze: &Maze) -> Self {
+        let mut keys_acquired = self.keys_acquired.clone();
+        keys_acquired.push(key);
+
+        let keypos = maze.keys[&key];
+
+        let cost = self.cost + marginal_cost;
+
+        let min_remaining = maze
+            .keys
+            .iter()
+            .filter(|(&key, _)| !keys_acquired.contains(key))
+            .map(|(_, pos)| keypos.manhattan(pos))
+            .max()
+            .unwrap_or(0);
+
         PartialPath {
-            path,
-            maze: self.maze,
-            keys_acquired: self.keys_acquired.clone(),
-            next_key: self.next_key,
-            backtrack_ok: false,
+            min_remaining,
+            keys_acquired,
+            cost,
         }
-    }
-
-    fn can_open(&self, door: char) -> bool {
-        self.has_key(door.to_ascii_lowercase())
-    }
-
-    fn cost(&self) -> usize {
-        self.len() - 1
-    }
-
-    fn got_key(&mut self, key: char, next_key: char) {
-        self.keys_acquired += &String::from(key);
-        self.next_key = next_key;
-        self.backtrack_ok = true;
     }
 
     fn has_key(&self, key: char) -> bool {
         self.keys_acquired.contains(key)
     }
 
-    fn min_cost_to_goal(&self) -> usize {
-        let p = self.last().unwrap();
-
-        let key_costs: Vec<_> = self
-            .maze
-            .keys
-            .iter()
-            .filter(|(&k, _)| !self.has_key(k))
-            .map(|(_, loc)| p.manhattan(loc))
-            .collect();
-
-        self.cost() + key_costs.iter().max().unwrap()
+    fn meets_requirements(&self, key_requirements: &str) -> bool {
+        key_requirements.chars().all(|k| self.has_key(k))
     }
-}
 
-use std::ops::Deref;
-
-impl<'a> Deref for PartialPath<'a> {
-    type Target = Vec<Position>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.path
+    fn min_cost_to_goal(&self) -> usize {
+        self.cost + self.min_remaining
     }
 }
 
@@ -230,73 +221,7 @@ impl Maze {
     }
 
     fn shortest_path(&self) -> usize {
-        let mut paths = BinaryHeap::new();
-        for key in self.keys.keys() {
-            paths.push(PartialPath::new(self, self.origin, *key));
-        }
-
-        while let Some(path) = paths.pop() {
-            if paths.len() > 10_000 {
-                panic!("too many paths");
-            }
-            // println!("Examining {:?}, looking for {}, acquired [{}]", path.path, path.next_key, path.keys_acquired);
-            let pos = path.last().unwrap();
-
-            let back = if path.len() > 1 {
-                path.iter().nth(path.len() - 2).unwrap()
-            } else {
-                pos
-            };
-
-            for next in &pos.neighbors() {
-                // println!("Maybe branch to {:?}", next);
-                if !path.backtrack_ok && back == next {
-                    // println!("pruning backtrack");
-                    continue;
-                }
-
-                let tile = self.tile_at(next);
-                if *tile == Tile::Wall {
-                    // println!("pruning wall");
-                    continue;
-                }
-                if let Tile::Door(c) = tile {
-                    if !path.can_open(*c) {
-                        // println!("pruning door {}", *c);
-                        continue;
-                    }
-                    // println!("entering door {}", *c);
-                }
-
-                if let Tile::Key(key) = tile {
-                    if *key == path.next_key {
-                        // println!("found key {}", *key);
-                        let mut keys_needed = 0;
-                        for other_key in self.keys.keys() {
-                            if other_key != key && !path.has_key(*other_key) {
-                                let mut branch = path.branch(*next);
-                                branch.got_key(*key, *other_key);
-                                paths.push(branch);
-                                keys_needed += 1;
-                            }
-                        }
-                        if keys_needed == 0 {
-                            return path.len();
-                        }
-                        continue;
-                    } else if !path.has_key(*key) {
-                        // println!("pruning wrong key {}", *key);
-                        continue;
-                    }
-                    // already acquired key falls through
-                }
-
-                paths.push(path.branch(*next));
-            }
-        }
-
-        // I think I must be pruning something that I shouldn't prune
-        panic!("did not find a path to all goals");
+        Pathfinder::new(&self).shortest_path()
     }
 
     fn tile_at(&self, p: &Position) -> &Tile {
@@ -309,13 +234,220 @@ impl Maze {
     }
 }
 
+#[derive(Clone)]
+struct PartialConnection {
+    goal: Position,
+    path: Vec<Position>,
+}
+
+impl PartialEq for PartialConnection {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.goal == other.goal
+    }
+}
+
+impl Eq for PartialConnection {}
+
+impl PartialOrd for PartialConnection {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PartialConnection {
+    // compares opposite natural ordering because lower cost = higher
+    // priority for the queue
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.min_cost_to_goal().cmp(&self.min_cost_to_goal())
+    }
+}
+
+impl PartialConnection {
+    fn new(from: Position, to: Position) -> Self {
+        let path = vec![from];
+        PartialConnection { goal: to, path }
+    }
+
+    fn branch(&self, p: Position) -> Self {
+        let mut path = self.path.clone();
+        path.push(p);
+        PartialConnection {
+            goal: self.goal,
+            path,
+        }
+    }
+
+    fn cost(&self) -> usize {
+        self.len() - 1
+    }
+
+    fn min_cost_to_goal(&self) -> usize {
+        self.cost() + self.last().unwrap().manhattan(&self.goal)
+    }
+}
+
+impl Deref for PartialConnection {
+    type Target = Vec<Position>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.path
+    }
+}
+
+struct Connection {
+    from: char,
+    to: char,
+    cost: usize,
+    requires: String,
+}
+
+struct Pathfinder<'a> {
+    maze: &'a Maze,
+    connections: HashMap<(char, char), Connection>,
+}
+
+impl<'a> Pathfinder<'a> {
+    fn new(maze: &'a Maze) -> Self {
+        Pathfinder {
+            maze,
+            connections: HashMap::new(),
+        }
+    }
+
+    fn new_connection(&self, a: char, b: char, part: &PartialConnection) -> Connection {
+        let cost = part.cost();
+        let mut requires = String::new();
+        for pos in &part.path {
+            match self.maze.tile_at(pos) {
+                Tile::Door(d) => requires.push(d.to_ascii_lowercase()),
+                _ => (),
+            }
+        }
+        let from = a.min(b);
+        let to = b.max(a);
+        Connection {
+            from,
+            to,
+            cost,
+            requires,
+        }
+    }
+
+    fn get_cached_connection(&self, a: char, b: char) -> Option<&Connection> {
+        let from = a.min(b);
+        let to = b.max(a);
+        self.connections.get(&(from, to))
+    }
+
+    fn get_new_connection(&mut self, from: char, to: char) -> &Connection {
+        let mut partials = BinaryHeap::new();
+        partials.push(PartialConnection::new(
+            *self.maze.keys.get(&from).unwrap_or(&self.maze.origin),
+            *self.maze.keys.get(&to).unwrap(),
+        ));
+
+        while let Some(part) = partials.pop() {
+            let pos = *part.last().unwrap();
+            for next in &pos.neighbors() {
+                if part.contains(next) {
+                    continue;
+                }
+
+                if *next == part.goal {
+                    self.connections.insert(
+                        (from, to),
+                        self.new_connection(from, to, &part.branch(*next)),
+                    );
+                    return self.connections.get(&(from, to)).unwrap();
+                }
+
+                match self.maze.tile_at(next) {
+                    Tile::Wall => continue,
+                    _ => partials.push(part.branch(*next)),
+                }
+            }
+        }
+
+        panic!("found no path {} -> {}", from, to);
+    }
+
+    fn shortest_path(&mut self) -> usize {
+        let mut best_cost_for_keys: HashMap<String, usize> = HashMap::new();
+        let mut partials = BinaryHeap::new();
+        partials.push(PartialPath::new(self.maze));
+
+        while let Some(part) = partials.pop() {
+            if partials.len() > 100_000 {
+                panic!("too many paths");
+            }
+
+            if part.min_remaining == 0 {
+                return part.cost;
+            }
+            let last_key = part.keys_acquired.chars().last().unwrap_or('@');
+            for (&next_key, _) in &self.maze.keys {
+                if part.has_key(next_key) {
+                    continue;
+                }
+
+                let keys_sorted: String = {
+                    // It only matters which key we picked up last
+                    let mut chars: Vec<_> = part.keys_acquired.chars().collect();
+                    chars.sort();
+                    chars.push(next_key);
+                    chars.into_iter().collect()
+                };
+
+                let prev_best = best_cost_for_keys.get_mut(&keys_sorted);
+                if let Some(&mut cost) = prev_best {
+                    let min_cost_to_next =
+                        self.maze.keys[&last_key].manhattan(&self.maze.keys[&next_key]);
+                    if min_cost_to_next > cost {
+                        continue;
+                    }
+                }
+
+                let mut conn = self.get_cached_connection(last_key, next_key);
+                if conn.is_none() {
+                    conn = Some(self.get_new_connection(last_key, next_key));
+                }
+                let conn = conn.unwrap();
+
+                if !part.meets_requirements(&conn.requires) {
+                    continue;
+                }
+
+                let branch = part.branch(next_key, conn.cost, &self.maze);
+
+                let mut pursue: bool = false;
+                if let Some(cost) = prev_best {
+                    if branch.cost < *cost {
+                        pursue = true;
+                        *cost = branch.cost;
+                    }
+                } else {
+                    pursue = true;
+                    best_cost_for_keys.insert(keys_sorted, branch.cost);
+                }
+
+                if pursue {
+                    partials.push(branch);
+                }
+            }
+        }
+
+        panic!("found no path")
+    }
+}
+
 fn input() -> String {
     fs::read_to_string("input.txt").expect("Can't find input.txt")
 }
 
 fn do_part1(input: &str) -> AdventResult {
     let maze = Maze::new(input);
-    maze.shortest_path()
+    let result = maze.shortest_path();
+    result
 }
 
 fn do_part2(input: &str) -> AdventResult {
@@ -383,19 +515,31 @@ mod test {
 
         assert_eq!(136, do_part1(input));
     }
-    
 
     #[test]
+    fn part1_example5() {
+        let input = "\
+########################
+#@..............ac.GI.b#
+###d#e#f################
+###A#B#C################
+###g#h#i################
+########################";
+
+        assert_eq!(81, do_part1(input));
+    }
+
+    //    #[test]
     fn part2_example() {
         todo!()
     }
 
-    #[test]
+    // #[test]
     fn part1_solution() {
-        // assert_eq!(AdventResult::MAX, part1());
+        assert_eq!(AdventResult::MAX, part1());
     }
 
-    #[test]
+    //    #[test]
     fn part2_solution() {
         assert_eq!(AdventResult::MAX, part2());
     }
