@@ -1,4 +1,4 @@
-#![allow(dead_code, unused_variables)]
+#![cfg_attr(not(test), allow(dead_code, unused_variables))]
 
 type AdventResult = usize;
 
@@ -6,155 +6,27 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::fs;
-use std::ops::Deref;
 
-type Coordinate = usize;
+type Coordinate = i32;
+type Distance = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Position(Coordinate, Coordinate);
 
 impl Position {
-    fn manhattan(&self, other: &Position) -> usize {
-        self.0.max(other.0) - self.0.min(other.0) + self.1.max(other.1) - self.1.min(other.1)
+    fn manhattan(&self, other: &Position) -> Distance {
+        (self.0.max(other.0) - self.0.min(other.0)) as Distance
+            + (self.1.max(other.1) - self.1.min(other.1)) as Distance
     }
 
-    fn max(&self, other: &Position) -> Position {
-        Position(self.0.max(other.0), self.1.max(other.1))
-    }
-
-    fn min(&self, other: &Position) -> Position {
-        Position(self.0.min(other.0), self.1.min(other.1))
-    }
-
-    fn neighbors(&self) -> Vec<Position> {
-        let mut locs = vec![];
-        for dir in Direction::ALL {
-            if let Some(loc) = dir.of(self) {
-                locs.push(loc);
-            }
-        }
-        locs
-    }
-}
-
-#[derive(Clone)]
-struct PartialPath {
-    cost: usize,
-    min_remaining: usize,
-    keys_acquired: String,
-}
-
-impl PartialEq for PartialPath {
-    fn eq(&self, other: &Self) -> bool {
-        self.cost == other.cost
-    }
-}
-
-impl Eq for PartialPath {}
-
-impl PartialOrd for PartialPath {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for PartialPath {
-    // compares opposite natural ordering because lower cost = higher
-    // priority for the queue
-    fn cmp(&self, other: &Self) -> Ordering {
-        let c = other.min_cost_to_goal().cmp(&self.min_cost_to_goal());
-        if c == Ordering::Equal {
-            let c = other.cost.cmp(&self.cost);
-            if c == Ordering::Equal {
-                return self.keys_acquired.cmp(&other.keys_acquired);
-            }
-            return c;
-        }
-        return c;
-    }
-}
-
-impl PartialPath {
-    fn new(maze: &Maze) -> Self {
-        let min_remaining = maze
-            .keys
-            .iter()
-            .map(|(_, pos)| maze.origin.manhattan(pos))
-            .max()
-            .unwrap();
-        PartialPath {
-            min_remaining,
-            keys_acquired: String::new(),
-            cost: 0,
-        }
-    }
-
-    fn branch(&self, key: char, marginal_cost: usize, maze: &Maze) -> Self {
-        let mut keys_acquired = self.keys_acquired.clone();
-        keys_acquired.push(key);
-
-        let keypos = maze.keys[&key];
-
-        let cost = self.cost + marginal_cost;
-
-        let min_remaining = maze
-            .keys
-            .iter()
-            .filter(|(&key, _)| !keys_acquired.contains(key))
-            .map(|(_, pos)| keypos.manhattan(pos))
-            .max()
-            .unwrap_or(0);
-
-        PartialPath {
-            min_remaining,
-            keys_acquired,
-            cost,
-        }
-    }
-
-    fn has_key(&self, key: char) -> bool {
-        self.keys_acquired.contains(key)
-    }
-
-    fn meets_requirements(&self, key_requirements: &str) -> bool {
-        key_requirements.chars().all(|k| self.has_key(k))
-    }
-
-    fn min_cost_to_goal(&self) -> usize {
-        self.cost + self.min_remaining
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Direction {
-    North,
-    East,
-    South,
-    West,
-}
-use Direction::{East, North, South, West};
-
-impl Direction {
-    const ALL: [Self; 4] = [North, East, South, West];
-
-    fn of(&self, p: &Position) -> Option<Position> {
-        let Position(x, y) = *p;
-        match self {
-            North if y > 0 => Some(Position(x, y - 1)),
-            East => Some(Position(x + 1, y)),
-            South => Some(Position(x, y + 1)),
-            West if x > 0 => Some(Position(x - 1, y)),
-            _ => None,
-        }
-    }
-
-    fn reverse(&self) -> Self {
-        match self {
-            North => South,
-            East => West,
-            South => North,
-            West => East,
-        }
+    fn neighbors(&self) -> [Position; 4] {
+        let Position(x, y) = *self;
+        [
+            Position(x, y - 1),
+            Position(x + 1, y),
+            Position(x, y + 1),
+            Position(x - 1, y),
+        ]
     }
 }
 
@@ -163,8 +35,8 @@ enum Tile {
     Origin,
     Empty,
     Wall,
-    Key(char),
-    Door(char),
+    Key(u8),
+    Door(u8),
 }
 
 impl From<char> for Tile {
@@ -173,15 +45,18 @@ impl From<char> for Tile {
             '#' => Tile::Wall,
             '.' => Tile::Empty,
             '@' => Tile::Origin,
-            'A'..='Z' => Tile::Door(c),
-            'a'..='z' => Tile::Key(c),
+            'A'..='Z' => Tile::Door(Maze::doorno(c)),
+            'a'..='z' => Tile::Key(Maze::keyno(c)),
             _ => panic!("unknown tile char {}", c),
         }
     }
 }
 
+const MAX_KEYS: usize = 26;
+
 struct Maze {
-    keys: HashMap<char, Position>,
+    all_keys: [Position; MAX_KEYS],
+    key_count: u8,
     origin: Position,
     rowlen: usize,
     tiles: Vec<Tile>,
@@ -191,8 +66,9 @@ impl Maze {
     fn new(input: &str) -> Self {
         let mut tiles = vec![];
         let mut rowlen = 0;
-        let mut keys = HashMap::new();
         let mut origin = Position(0, 0);
+        let mut all_keys = [Position(0, 0); MAX_KEYS];
+        let mut last_key = 0;
 
         for (row, line) in input.trim().lines().enumerate() {
             let line = line.trim();
@@ -202,10 +78,11 @@ impl Maze {
                 tiles.push(tile);
                 match tile {
                     Tile::Origin => {
-                        origin = Position(row, col);
+                        origin = Position(row as Coordinate, col as Coordinate);
                     }
-                    Tile::Key(_) => {
-                        keys.insert(c, Position(row, col));
+                    Tile::Key(k) => {
+                        all_keys[k as usize] = Position(row as Coordinate, col as Coordinate);
+                        last_key = last_key.max(k);
                     }
                     _ => {}
                 }
@@ -213,11 +90,24 @@ impl Maze {
         }
 
         Maze {
-            keys,
+            all_keys,
+            key_count: last_key + 1,
             origin,
             rowlen,
             tiles,
         }
+    }
+
+    fn doorno(door: char) -> u8 {
+        door as u8 - 'A' as u8
+    }
+
+    fn keys(&self) -> &[Position] {
+        &self.all_keys[0..self.key_count as usize]
+    }
+
+    fn keyno(key: char) -> u8 {
+        key as u8 - 'a' as u8
     }
 
     fn shortest_path(&self) -> usize {
@@ -226,7 +116,9 @@ impl Maze {
 
     fn tile_at(&self, p: &Position) -> &Tile {
         let Position(r, c) = *p;
-        if let Some(t) = self.tiles.get(r * self.rowlen + c) {
+        if r < 0 || c < 0 {
+            &Tile::Wall
+        } else if let Some(t) = self.tiles.get(r as usize * self.rowlen + c as usize) {
             t
         } else {
             &Tile::Wall
@@ -234,15 +126,36 @@ impl Maze {
     }
 }
 
-#[derive(Clone)]
 struct PartialConnection {
-    goal: Position,
     path: Vec<Position>,
+    min_cost_remaining: u32,
+}
+
+impl PartialConnection {
+    fn new(origin: Position, goal: &Position) -> Self {
+        PartialConnection {
+            min_cost_remaining: origin.manhattan(goal),
+            path: vec![origin],
+        }
+    }
+
+    fn branch(&self, next: Position, goal: &Position) -> Self {
+        let mut path = self.path.clone();
+        path.push(next);
+        PartialConnection {
+            path,
+            min_cost_remaining: next.manhattan(goal),
+        }
+    }
+
+    fn min_cost_to_goal(&self) -> usize {
+        self.path.len() + self.min_cost_remaining as usize
+    }
 }
 
 impl PartialEq for PartialConnection {
     fn eq(&self, other: &Self) -> bool {
-        self.path == other.path && self.goal == other.goal
+        Ordering::Equal == self.cmp(other)
     }
 }
 
@@ -258,52 +171,111 @@ impl Ord for PartialConnection {
     // compares opposite natural ordering because lower cost = higher
     // priority for the queue
     fn cmp(&self, other: &Self) -> Ordering {
-        other.min_cost_to_goal().cmp(&self.min_cost_to_goal())
-    }
-}
-
-impl PartialConnection {
-    fn new(from: Position, to: Position) -> Self {
-        let path = vec![from];
-        PartialConnection { goal: to, path }
-    }
-
-    fn branch(&self, p: Position) -> Self {
-        let mut path = self.path.clone();
-        path.push(p);
-        PartialConnection {
-            goal: self.goal,
-            path,
+        match other.min_cost_to_goal().cmp(&self.min_cost_to_goal()) {
+            Ordering::Equal => self.path.len().cmp(&other.path.len()),
+            x => x,
         }
-    }
-
-    fn cost(&self) -> usize {
-        self.len() - 1
-    }
-
-    fn min_cost_to_goal(&self) -> usize {
-        self.cost() + self.last().unwrap().manhattan(&self.goal)
-    }
-}
-
-impl Deref for PartialConnection {
-    type Target = Vec<Position>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.path
     }
 }
 
 struct Connection {
-    from: char,
-    to: char,
-    cost: usize,
-    requires: String,
+    cost: u32,
+    keys_required: u32,
+}
+
+struct PartialPath {
+    position: Position,
+    keys: u32,
+    cost: u32,
+    min_cost_remaining: u32,
+}
+
+impl PartialPath {
+    fn new(origin: Position, maze: &Maze) -> PartialPath {
+        PartialPath {
+            position: origin,
+            keys: 0,
+            cost: 0,
+            min_cost_remaining: maze
+                .keys()
+                .iter()
+                .map(|pos| origin.manhattan(pos))
+                .max()
+                .unwrap(),
+        }
+    }
+
+    fn branch(
+        &self,
+        position: Position,
+        connection_cost: u32,
+        keyno_acquired: u8,
+        maze: &Maze,
+    ) -> Self {
+        let keys = self.keys | 1 << keyno_acquired;
+
+        let min_cost_remaining = maze
+            .keys()
+            .iter()
+            .enumerate()
+            .filter(|(keyno, _)| 0 == keys & 1 << *keyno)
+            .map(|(_, pos)| position.manhattan(pos))
+            .max()
+            .unwrap_or(0);
+
+        PartialPath {
+            position,
+            keys,
+            cost: self.cost + connection_cost,
+            min_cost_remaining,
+        }
+    }
+
+    fn has_keyno(&self, keyno: u8) -> bool {
+        0 != self.keys & 1 << keyno
+    }
+
+    fn has_keys(&self, keys_required: u32) -> bool {
+        0 == (self.keys & keys_required) ^ keys_required
+    }
+
+    fn keycount(&self) -> u32 {
+        self.keys.count_ones()
+    }
+
+    fn min_cost_to_goal(&self) -> u32 {
+        self.cost + self.min_cost_remaining
+    }
+}
+
+impl PartialEq for PartialPath {
+    fn eq(&self, other: &Self) -> bool {
+        Ordering::Equal == self.cmp(other)
+    }
+}
+
+impl Eq for PartialPath {}
+
+impl PartialOrd for PartialPath {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PartialPath {
+    // compares opposite natural ordering because lower cost = higher
+    // priority for the queue
+    fn cmp(&self, other: &Self) -> Ordering {
+        match other.min_cost_to_goal().cmp(&self.min_cost_to_goal()) {
+            Ordering::Equal => self.keycount().cmp(&other.keycount()),
+            x => x,
+        }
+    }
 }
 
 struct Pathfinder<'a> {
     maze: &'a Maze,
-    connections: HashMap<(char, char), Connection>,
+    connections: HashMap<(Position, Position), Connection>,
 }
 
 impl<'a> Pathfinder<'a> {
@@ -314,129 +286,90 @@ impl<'a> Pathfinder<'a> {
         }
     }
 
-    fn new_connection(&self, a: char, b: char, part: &PartialConnection) -> Connection {
-        let cost = part.cost();
-        let mut requires = String::new();
-        for pos in &part.path {
-            match self.maze.tile_at(pos) {
-                Tile::Door(d) => requires.push(d.to_ascii_lowercase()),
-                _ => (),
-            }
-        }
-        let from = a.min(b);
-        let to = b.max(a);
-        Connection {
-            from,
-            to,
-            cost,
-            requires,
-        }
-    }
+    fn get_connection(&mut self, a: &Position, b: &Position) -> &Connection {
+        let cmp = match a.0.cmp(&b.0) {
+            Ordering::Equal => a.1.cmp(&b.1),
+            diff => diff,
+        };
+        let (a, b) = match cmp {
+            Ordering::Greater => (*b, *a),
+            _ => (*a, *b),
+        };
 
-    fn get_cached_connection(&self, a: char, b: char) -> Option<&Connection> {
-        let from = a.min(b);
-        let to = b.max(a);
-        self.connections.get(&(from, to))
-    }
+        self.connections.entry((a, b)).or_insert_with(|| {
+            let mut heap = BinaryHeap::new();
+            heap.push(PartialConnection::new(a, &b));
 
-    fn get_new_connection(&mut self, from: char, to: char) -> &Connection {
-        let mut partials = BinaryHeap::new();
-        partials.push(PartialConnection::new(
-            *self.maze.keys.get(&from).unwrap_or(&self.maze.origin),
-            *self.maze.keys.get(&to).unwrap(),
-        ));
-
-        while let Some(part) = partials.pop() {
-            let pos = *part.last().unwrap();
-            for next in &pos.neighbors() {
-                if part.contains(next) {
-                    continue;
+            while let Some(part) = heap.pop() {
+                if part.min_cost_remaining == 0 {
+                    let mut keys_required = 0;
+                    for pos in &part.path {
+                        if let Tile::Door(d) = self.maze.tile_at(pos) {
+                            keys_required |= 1 << d;
+                        }
+                    }
+                    return Connection {
+                        cost: (part.path.len() - 1) as u32,
+                        keys_required,
+                    };
                 }
 
-                if *next == part.goal {
-                    self.connections.insert(
-                        (from, to),
-                        self.new_connection(from, to, &part.branch(*next)),
-                    );
-                    return self.connections.get(&(from, to)).unwrap();
-                }
-
-                match self.maze.tile_at(next) {
-                    Tile::Wall => continue,
-                    _ => partials.push(part.branch(*next)),
+                for next in part.path.last().unwrap().neighbors() {
+                    if part.path.contains(&next) {
+                        continue;
+                    }
+                    match self.maze.tile_at(&next) {
+                        Tile::Wall => continue,
+                        _ => heap.push(part.branch(next, &b)),
+                    }
                 }
             }
-        }
 
-        panic!("found no path {} -> {}", from, to);
+            panic!("failed to find connection {:?} <=> {:?}", a, b);
+        })
     }
 
     fn shortest_path(&mut self) -> usize {
-        let mut best_cost_for_keys: HashMap<String, usize> = HashMap::new();
-        let mut partials = BinaryHeap::new();
-        partials.push(PartialPath::new(self.maze));
+        let mut heap = BinaryHeap::new();
+        let mut best_seen_map = HashMap::new();
 
-        while let Some(part) = partials.pop() {
-            if partials.len() > 100_000 {
-                panic!("too many paths");
+        heap.push(PartialPath::new(self.maze.origin, &self.maze));
+
+        while let Some(part) = heap.pop() {
+            if part.min_cost_remaining == 0 {
+                return part.cost as usize;
             }
 
-            if part.min_remaining == 0 {
-                return part.cost;
-            }
-            let last_key = part.keys_acquired.chars().last().unwrap_or('@');
-            for (&next_key, _) in &self.maze.keys {
-                if part.has_key(next_key) {
+            for (next_keyno, next_keypos) in self.maze.keys().iter().enumerate() {
+                let next_keyno = next_keyno as u8;
+                if part.has_keyno(next_keyno) {
                     continue;
                 }
 
-                let keys_sorted: String = {
-                    // It only matters which key we picked up last
-                    let mut chars: Vec<_> = part.keys_acquired.chars().collect();
-                    chars.sort();
-                    chars.push(next_key);
-                    chars.into_iter().collect()
-                };
+                let next_conn = self.get_connection(&part.position, next_keypos);
+                if !part.has_keys(next_conn.keys_required) {
+                    continue;
+                }
 
-                let prev_best = best_cost_for_keys.get_mut(&keys_sorted);
-                if let Some(&mut cost) = prev_best {
-                    let min_cost_to_next =
-                        self.maze.keys[&last_key].manhattan(&self.maze.keys[&next_key]);
-                    if min_cost_to_next > cost {
+                let branch = part.branch(*next_keypos, next_conn.cost, next_keyno, &self.maze);
+
+                // Prune the branch if it is no better than an
+                // already-seen branch at this position with the same
+                // keys
+                if let Some(best_seen) = best_seen_map.get_mut(&(branch.position, branch.keys)) {
+                    if *best_seen <= branch.cost {
                         continue;
                     }
-                }
-
-                let mut conn = self.get_cached_connection(last_key, next_key);
-                if conn.is_none() {
-                    conn = Some(self.get_new_connection(last_key, next_key));
-                }
-                let conn = conn.unwrap();
-
-                if !part.meets_requirements(&conn.requires) {
-                    continue;
-                }
-
-                let branch = part.branch(next_key, conn.cost, &self.maze);
-
-                let mut pursue: bool = false;
-                if let Some(cost) = prev_best {
-                    if branch.cost < *cost {
-                        pursue = true;
-                        *cost = branch.cost;
-                    }
+                    *best_seen = branch.cost;
                 } else {
-                    pursue = true;
-                    best_cost_for_keys.insert(keys_sorted, branch.cost);
+                    best_seen_map.insert((branch.position, branch.keys), branch.cost);
                 }
 
-                if pursue {
-                    partials.push(branch);
-                }
+                heap.push(branch);
             }
         }
 
-        panic!("found no path")
+        panic!("no complete path found");
     }
 }
 
@@ -529,17 +462,17 @@ mod test {
         assert_eq!(81, do_part1(input));
     }
 
-    //    #[test]
+    #[test]
     fn part2_example() {
         todo!()
     }
 
-    // #[test]
+    #[test]
     fn part1_solution() {
-        assert_eq!(AdventResult::MAX, part1());
+        assert_eq!(4192, part1());
     }
 
-    //    #[test]
+    #[test]
     fn part2_solution() {
         assert_eq!(AdventResult::MAX, part2());
     }
