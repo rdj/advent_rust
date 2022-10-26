@@ -30,6 +30,10 @@ impl Position {
     }
 }
 
+const PART2_ORIGIN_COUNT: usize = 4;
+
+type Positions = [Position; PART2_ORIGIN_COUNT];
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Tile {
     Origin,
@@ -57,16 +61,17 @@ const MAX_KEYS: usize = 26;
 struct Maze {
     all_keys: [Position; MAX_KEYS],
     key_count: u8,
-    origin: Position,
+    origin: Positions,
     rowlen: usize,
     tiles: Vec<Tile>,
+    part2: bool,
 }
 
 impl Maze {
     fn new(input: &str) -> Self {
         let mut tiles = vec![];
         let mut rowlen = 0;
-        let mut origin = Position(0, 0);
+        let mut origin = [Position(0, 0); 4];
         let mut all_keys = [Position(0, 0); MAX_KEYS];
         let mut last_key = 0;
 
@@ -78,7 +83,7 @@ impl Maze {
                 tiles.push(tile);
                 match tile {
                     Tile::Origin => {
-                        origin = Position(row as Coordinate, col as Coordinate);
+                        origin[0] = Position(row as Coordinate, col as Coordinate);
                     }
                     Tile::Key(k) => {
                         all_keys[k as usize] = Position(row as Coordinate, col as Coordinate);
@@ -95,6 +100,53 @@ impl Maze {
             origin,
             rowlen,
             tiles,
+            part2: false,
+        }
+    }
+
+    fn enable_part2(&mut self) {
+        self.part2 = true;
+
+        let Position(r, c) = self.origin[0];
+        self.tile_replace(&Position(r - 1, c - 1), Tile::Origin);
+        self.tile_replace(&Position(r - 1, c), Tile::Wall);
+        self.tile_replace(&Position(r - 1, c + 1), Tile::Origin);
+        self.tile_replace(&Position(r, c - 1), Tile::Wall);
+        self.tile_replace(&Position(r, c), Tile::Wall);
+        self.tile_replace(&Position(r, c + 1), Tile::Wall);
+        self.tile_replace(&Position(r + 1, c - 1), Tile::Origin);
+        self.tile_replace(&Position(r + 1, c), Tile::Wall);
+        self.tile_replace(&Position(r + 1, c + 1), Tile::Origin);
+
+        self.origin[0] = Position(r - 1, c - 1);
+        self.origin[1] = Position(r - 1, c + 1);
+        self.origin[2] = Position(r + 1, c - 1);
+        self.origin[3] = Position(r + 1, c + 1);
+    }
+
+    fn quadrants(&self) -> impl Iterator<Item = usize> {
+        if self.part2 {
+            (0..PART2_ORIGIN_COUNT).into_iter()
+        } else {
+            (0..1).into_iter()
+        }
+    }
+
+    fn quadrant(&self, pos: &Position) -> usize {
+        if !self.part2 {
+            return 0;
+        }
+
+        if pos.0 <= self.origin[0].0 {
+            if pos.1 <= self.origin[0].1 {
+                0
+            } else {
+                1
+            }
+        } else if pos.1 <= self.origin[2].1 {
+            2
+        } else {
+            3
         }
     }
 
@@ -123,6 +175,15 @@ impl Maze {
         } else {
             &Tile::Wall
         }
+    }
+
+    fn tile_replace(&mut self, p: &Position, new: Tile) {
+        let Position(r, c) = *p;
+        let old = self
+            .tiles
+            .get_mut(r as usize * self.rowlen + c as usize)
+            .unwrap();
+        *old = new;
     }
 }
 
@@ -184,51 +245,52 @@ struct Connection {
 }
 
 struct PartialPath {
-    position: Position,
+    position: Positions,
     keys: u32,
     cost: u32,
     min_cost_remaining: u32,
 }
 
 impl PartialPath {
-    fn new(origin: Position, maze: &Maze) -> PartialPath {
+    fn new(origin: &Positions, maze: &Maze) -> PartialPath {
         PartialPath {
-            position: origin,
+            position: origin.clone(),
             keys: 0,
             cost: 0,
-            min_cost_remaining: maze
-                .keys()
-                .iter()
-                .map(|pos| origin.manhattan(pos))
-                .max()
-                .unwrap(),
+            min_cost_remaining: Self::mincost(origin, 0, &maze),
         }
     }
 
     fn branch(
         &self,
-        position: Position,
+        position: Positions,
         connection_cost: u32,
         keyno_acquired: u8,
         maze: &Maze,
     ) -> Self {
         let keys = self.keys | 1 << keyno_acquired;
 
-        let min_cost_remaining = maze
-            .keys()
-            .iter()
-            .enumerate()
-            .filter(|(keyno, _)| 0 == keys & 1 << *keyno)
-            .map(|(_, pos)| position.manhattan(pos))
-            .max()
-            .unwrap_or(0);
-
         PartialPath {
             position,
             keys,
             cost: self.cost + connection_cost,
-            min_cost_remaining,
+            min_cost_remaining: Self::mincost(&position, keys, &maze),
         }
+    }
+
+    fn mincost(position: &Positions, keys: u32, maze: &Maze) -> u32 {
+        maze.quadrants()
+            .map(|q| {
+                maze.keys()
+                    .iter()
+                    .enumerate()
+                    .filter(|(keyno, _)| 0 == keys & 1 << *keyno)
+                    .filter(|(_, pos)| maze.quadrant(pos) == q)
+                    .map(|(_, pos)| position[q].manhattan(pos))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .sum()
     }
 
     fn has_keyno(&self, keyno: u8) -> bool {
@@ -333,7 +395,7 @@ impl<'a> Pathfinder<'a> {
         let mut heap = BinaryHeap::new();
         let mut best_seen_map = HashMap::new();
 
-        heap.push(PartialPath::new(self.maze.origin, &self.maze));
+        heap.push(PartialPath::new(&self.maze.origin, &self.maze));
 
         while let Some(part) = heap.pop() {
             if part.min_cost_remaining == 0 {
@@ -346,12 +408,17 @@ impl<'a> Pathfinder<'a> {
                     continue;
                 }
 
-                let next_conn = self.get_connection(&part.position, next_keypos);
+                let quad = self.maze.quadrant(next_keypos);
+
+                let next_conn = self.get_connection(&part.position[quad], next_keypos);
                 if !part.has_keys(next_conn.keys_required) {
                     continue;
                 }
 
-                let branch = part.branch(*next_keypos, next_conn.cost, next_keyno, &self.maze);
+                let mut newpos = part.position.clone();
+                newpos[quad] = *next_keypos;
+
+                let branch = part.branch(newpos, next_conn.cost, next_keyno, &self.maze);
 
                 // Prune the branch if it is no better than an
                 // already-seen branch at this position with the same
@@ -384,7 +451,10 @@ fn do_part1(input: &str) -> AdventResult {
 }
 
 fn do_part2(input: &str) -> AdventResult {
-    todo!()
+    let mut maze = Maze::new(input);
+    maze.enable_part2();
+    let result = maze.shortest_path();
+    result
 }
 
 fn part1() -> AdventResult {
@@ -463,8 +533,65 @@ mod test {
     }
 
     #[test]
-    fn part2_example() {
-        todo!()
+    fn part2_example1() {
+        let input = "\
+#######
+#a.#Cd#
+##...##
+##.@.##
+##...##
+#cB#Ab#
+#######";
+
+        assert_eq!(8, do_part2(input));
+    }
+
+    #[test]
+    fn part2_example2() {
+        let input = "\
+###############
+#d.ABC.#.....a#
+###############
+#######@#######
+###############
+#b.....#.....c#
+###############";
+
+        assert_eq!(24, do_part2(input));
+    }
+
+    #[test]
+    fn part2_example3() {
+        let input = "\
+#############
+#DcBa.#.GhKl#
+#.#######I###
+#e#d##@##j#k#
+###C#######J#
+#fEbA.#.FgHi#
+#############";
+
+        // This one does not follow the same rule of quadrants that
+        // all the other examples (and the actual input) do. I'm not
+        // going to bother fixing it, since it's a red herring.
+
+        assert_eq!(32, do_part2(input));
+    }
+
+    #[test]
+    fn part2_example4() {
+        let input = "\
+#############
+#g#f.D#..h#l#
+#F###e#E###.#
+#dCba###BcIJ#
+######@######
+#nK.L###G...#
+#M###N#H###.#
+#o#m..#i#jk.#
+#############";
+
+        assert_eq!(72, do_part2(input));
     }
 
     #[test]
@@ -474,6 +601,6 @@ mod test {
 
     #[test]
     fn part2_solution() {
-        assert_eq!(AdventResult::MAX, part2());
+        assert_eq!(1790, part2());
     }
 }
