@@ -93,8 +93,15 @@ impl GatewayLabel {
 
     fn to_string(&self) -> String {
         let mut s = String::new();
-        s.push(char::from('A' as u8 + (self.0 >> 8) as u8));
-        s.push(char::from('A' as u8 + (self.0 & 0xff) as u8));
+        let plain = self.to_outer();
+        s.push(char::from('A' as u8 + (plain.0 >> 8) as u8));
+        s.push(char::from('A' as u8 + (plain.0 & 0xff) as u8));
+        if self.is_outer() {
+            s += " outer";
+        } else {
+            s += " inner";
+        }
+
         s
     }
 }
@@ -325,39 +332,69 @@ fn dijkstra(
     costs: &BTreeMap<u32, u32>,
     start: GatewayLabel,
     end: GatewayLabel,
+    multilevel: bool,
 ) -> u32 {
     let mut distances = BTreeMap::new();
     let mut visited = BTreeSet::new();
     let mut to_visit = BinaryHeap::new();
 
-    distances.insert(start, 0);
-    to_visit.push(MinHeapEntry(0, start));
+    distances.insert((start, 0), 0);
+    to_visit.push(MinHeapEntry(0, (start, 0)));
 
-    while let Some(MinHeapEntry(distance, label)) = to_visit.pop() {
-        if !visited.insert(label) {
+    while let Some(MinHeapEntry(distance, (label, level))) = to_visit.pop() {
+        if !visited.insert((label, level)) {
             continue;
         }
 
         if label == end {
-            return distances[&end];
+            return distances[&(end, 0)];
         }
 
-        for neighbor in labels.iter().filter(|n| !visited.contains(n)) {
+        for neighbor in labels.iter() {
+            let mut level = level;
+
+            if multilevel {
+                // Traversing the edge between the inner/outer version
+                // of the gateway transitions levels.
+                if label.to_outer() == neighbor.to_outer() {
+                    if neighbor.is_outer() {
+                        level -= 1;
+                    } else {
+                        level += 1;
+                    }
+                } else {
+                    // Level 0 has different outer nodes
+                    let is_special = *neighbor == ORIGIN || *neighbor == DESTINATION;
+
+                    if level == 0 {
+                        if !is_special && neighbor.is_outer() {
+                            continue;
+                        }
+                    } else if is_special {
+                        continue;
+                    }
+                }
+            }
+
+            if visited.contains(&(*neighbor, level)) {
+                continue;
+            }
+
             if let Some(cost) = costs.get(&label.connection_id(neighbor)) {
                 let new_distance = distance + cost;
                 let is_shorter = distances
-                    .get(neighbor)
+                    .get(&(*neighbor, level))
                     .map_or(true, |existing| new_distance < *existing);
 
                 if is_shorter {
-                    distances.insert(*neighbor, new_distance);
-                    to_visit.push(MinHeapEntry(new_distance, *neighbor));
+                    distances.insert((*neighbor, level), new_distance);
+                    to_visit.push(MinHeapEntry(new_distance, (*neighbor, level)));
                 }
             }
         }
     }
 
-    panic!("path not found")
+    panic!("path not found {:?}", distances)
 }
 
 fn input() -> String {
@@ -367,18 +404,15 @@ fn input() -> String {
 fn do_part1(input: &str) -> AdventResult {
     let maze = Maze::new(input);
     let costs = maze.build_graph();
-    // for (conn, cost) in costs {
-    //     let a = GatewayLabel((conn >> 16) as u16);
-    //     let b = GatewayLabel((conn & 0xFFFF) as u16);
-    //     println!("{} <=> {} : {}", a.to_string(), b.to_string(), cost);
-    // }
     let nodes = maze.gateway_labels();
-
-    dijkstra(&nodes, &costs, ORIGIN, DESTINATION) as usize
+    dijkstra(&nodes, &costs, ORIGIN, DESTINATION, false) as usize
 }
 
 fn do_part2(input: &str) -> AdventResult {
-    todo!()
+    let maze = Maze::new(input);
+    let costs = maze.build_graph();
+    let nodes = maze.gateway_labels();
+    dijkstra(&nodes, &costs, ORIGIN, DESTINATION, true) as usize
 }
 
 fn part1() -> AdventResult {
@@ -461,8 +495,70 @@ YN......#               VT..#....QG
     }
 
     #[test]
-    fn part2_example() {
-        todo!()
+    fn part2_example1() {
+        let input = "         A           
+         A           
+  #######.#########  
+  #######.........#  
+  #######.#######.#  
+  #######.#######.#  
+  #######.#######.#  
+  #####  B    ###.#  
+BC...##  C    ###.#  
+  ##.##       ###.#  
+  ##...DE  F  ###.#  
+  #####    G  ###.#  
+  #########.#####.#  
+DE..#######...###.#  
+  #.#########.###.#  
+FG..#########.....#  
+  ###########.#####  
+             Z       
+             Z       ";
+        assert_eq!(26, do_part2(input));
+    }
+
+    #[test]
+    fn part2_example2() {
+        let input = "             Z L X W       C                 
+             Z P Q B       K                 
+  ###########.#.#.#.#######.###############  
+  #...#.......#.#.......#.#.......#.#.#...#  
+  ###.#.#.#.#.#.#.#.###.#.#.#######.#.#.###  
+  #.#...#.#.#...#.#.#...#...#...#.#.......#  
+  #.###.#######.###.###.#.###.###.#.#######  
+  #...#.......#.#...#...#.............#...#  
+  #.#########.#######.#.#######.#######.###  
+  #...#.#    F       R I       Z    #.#.#.#  
+  #.###.#    D       E C       H    #.#.#.#  
+  #.#...#                           #...#.#  
+  #.###.#                           #.###.#  
+  #.#....OA                       WB..#.#..ZH
+  #.###.#                           #.#.#.#  
+CJ......#                           #.....#  
+  #######                           #######  
+  #.#....CK                         #......IC
+  #.###.#                           #.###.#  
+  #.....#                           #...#.#  
+  ###.###                           #.#.#.#  
+XF....#.#                         RF..#.#.#  
+  #####.#                           #######  
+  #......CJ                       NM..#...#  
+  ###.#.#                           #.###.#  
+RE....#.#                           #......RF
+  ###.###        X   X       L      #.#.#.#  
+  #.....#        F   Q       P      #.#.#.#  
+  ###.###########.###.#######.#########.###  
+  #.....#...#.....#.......#...#.....#.#...#  
+  #####.#.###.#######.#######.###.###.#.#.#  
+  #.......#.......#.#.#.#.#...#...#...#.#.#  
+  #####.###.#####.#.#.#.#.###.###.#.###.###  
+  #.......#.....#.#...#...............#...#  
+  #############.#.#.###.###################  
+               A O F   N                     
+               A A D   M                     ";
+
+        assert_eq!(396, do_part2(input));
     }
 
     #[test]
@@ -472,6 +568,6 @@ YN......#               VT..#....QG
 
     #[test]
     fn part2_solution() {
-        assert_eq!(AdventResult::MAX, part2());
+        assert_eq!(7152, part2());
     }
 }
