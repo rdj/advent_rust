@@ -54,11 +54,17 @@ struct GatewayLabel(u16);
 const ORIGIN: GatewayLabel = GatewayLabel(0);
 const DESTINATION: GatewayLabel = GatewayLabel(25 << 8 | 25);
 
+const INNER_BIT: u16 = 0x8000;
+
 impl GatewayLabel {
-    fn new(l1: u8, l2: u8) -> Self {
+    fn new(l1: u8, l2: u8, is_outer: bool) -> Self {
         let l1 = l1 as u16;
         let l2 = l2 as u16;
-        GatewayLabel(l1 << 8 | l2)
+        let mut g = l1 << 8 | l2;
+        if !is_outer {
+            g |= INNER_BIT;
+        }
+        GatewayLabel(g)
     }
 
     fn connection_id(&self, other: &Self) -> u32 {
@@ -71,6 +77,18 @@ impl GatewayLabel {
         }
 
         n | m
+    }
+
+    fn is_inner(&self) -> bool {
+        0 != self.0 & INNER_BIT
+    }
+
+    fn is_outer(&self) -> bool {
+        0 == self.0 & INNER_BIT
+    }
+
+    fn to_outer(&self) -> GatewayLabel {
+        GatewayLabel(self.0 & !INNER_BIT)
     }
 
     fn to_string(&self) -> String {
@@ -148,6 +166,13 @@ impl Maze {
 
         let mut costs = BTreeMap::new();
 
+        // Every inner gateway has a direct connection to its outer
+        // counterpart at cost 1. For part 2 walking this transition
+        // changes levels of the maze.
+        for g in self.gateway_labels().into_iter().filter(|g| g.is_inner()) {
+            costs.insert(g.connection_id(&g.to_outer()), 1);
+        }
+
         let mut work: Vec<_> = self
             .tiles
             .iter()
@@ -175,11 +200,7 @@ impl Maze {
                             continue;
                         }
                         let connid = part.start.connection_id(label);
-                        let mut cost = part.path.len() as u32;
-                        if *label != DESTINATION && part.start != DESTINATION {
-                            // Cost for walking through a gateway
-                            cost += 1;
-                        }
+                        let cost = part.path.len() as u32;
                         costs
                             .entry(connid)
                             .and_modify(|existing| {
@@ -227,11 +248,12 @@ impl Maze {
 
             if let Some(gateway_pos) = gateway_pos {
                 let (label2_pos, label2) = label2.unwrap();
+                let is_outer = self.is_outer(&gateway_pos);
 
                 let gateway_label = if label_pos < label2_pos {
-                    GatewayLabel::new(*label, *label2)
+                    GatewayLabel::new(*label, *label2, is_outer)
                 } else {
-                    GatewayLabel::new(*label2, *label)
+                    GatewayLabel::new(*label2, *label, is_outer)
                 };
 
                 self.tile_replace(&gateway_pos, Tile::Gateway(gateway_label));
@@ -239,8 +261,22 @@ impl Maze {
         }
     }
 
+    fn gateway_labels(&self) -> Vec<GatewayLabel> {
+        self.tiles
+            .iter()
+            .filter_map(|t| match t {
+                Tile::Gateway(label) => Some(*label),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn index_to_pos(&self, index: usize) -> Position {
         Position(index % self.rowlen, index / self.rowlen)
+    }
+
+    fn is_outer(&self, p: &Position) -> bool {
+        p.0 < 3 || p.0 + 3 >= self.rowlen || p.1 < 3 || p.1 + 3 >= self.tiles.len() / self.rowlen
     }
 
     fn pos_to_index(&self, p: &Position) -> usize {
@@ -336,14 +372,7 @@ fn do_part1(input: &str) -> AdventResult {
     //     let b = GatewayLabel((conn & 0xFFFF) as u16);
     //     println!("{} <=> {} : {}", a.to_string(), b.to_string(), cost);
     // }
-    let nodes = maze
-        .tiles
-        .iter()
-        .filter_map(|t| match t {
-            Tile::Gateway(label) => Some(*label),
-            _ => None,
-        })
-        .collect();
+    let nodes = maze.gateway_labels();
 
     dijkstra(&nodes, &costs, ORIGIN, DESTINATION) as usize
 }
