@@ -1,0 +1,49 @@
+
+-ABCDEFGHI
+###.######
+
+"Jump as early as possible"
+NOT C J
+ --0-----
+
+-ABCDEFGHI
+#...######
+
+"Jump as late as possible"
+NOT A J
+ 0--------
+
+-ABCDEFGHI
+###.#..###
+
+"Jump as early as possible as long as there's someplace to land"
+NOT A T # t=!a
+NOT B J # j=!b
+OR T J  # j=(!a | !b)
+NOT C T # t=!c
+OR T J  # j=(!a | !b | !c)
+AND D J # j=d & (!a | !b | !c)
+
+ 0--1-----
+ -0-1-----
+ --01-----
+ 
+-ABCDEFGHI
+#.#.##.### => TRUE
+ 010110111
+##.#.##.## => FALSE
+ 101011011
+###.#.##.# => FALSE
+ 110101101
+
+ 010110111
+ 101011011
+ 110101101 <== matches previous pattern, but robot dies because !E & !H 
+
+match previous J & (E | H) -> J
+NOT J T # set t=0        t=!j
+NOT T T # set t=1        t=j
+AND E T # t=e            t=j & e
+OR H T  # t=(e | h)      t=h | (j & e)
+AND T J # j=(j & (e | h)) = ((d & (!a | !b | !c)) & (e | h))
+
