@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_variables)]
 
-use std::fs;
-use num::Integer; // extended_gcd
+use num::Integer;
+use std::fs; // extended_gcd
 
 type AdventResult = i128;
 
@@ -33,8 +33,8 @@ fn pow_mod(base: i128, mut exponent: i128, modulus: i128) -> i128 {
     assert!(base >= 0);
     assert!(exponent >= 0);
     assert!(modulus > 1);
-    
-    let mut result  = 1;
+
+    let mut result = 1;
     let mut base = base.rem_euclid(modulus);
     while exponent > 0 {
         if exponent.rem_euclid(2) == 1 {
@@ -86,10 +86,10 @@ impl Deck {
         //  Inc 7 [0 3 6 9 2 5 8 1 4 7]
         //                       ^
         // Leaves [0] as a fixed point and moves the value currently
-        // at [1] to [x], at [2] to [2*x % size], etc. 
+        // at [1] to [x], at [2] to [2*x % size], etc.
         //
         // The new step size can be determined by finding the value
-        // that lands in [1] after the change. 
+        // that lands in [1] after the change.
         //
         // To figure out the current index, find n where
         //   n * x = 1 (mod size)
@@ -108,7 +108,7 @@ impl Deck {
         //
         // All that said, maybe it's more intuitive just to think of
         // it as division.
-        
+
         let x_inv = multiplicative_inverse_mod(x, self.size);
         self.step = (self.step * x_inv).rem_euclid(self.size);
     }
@@ -148,7 +148,7 @@ impl Deck {
         // offset `b` looks like the partial sum of a geometric series
         //   b_n = b + ba + ba^2 + ba^3 + ... + ba^(n-1)
         //       = b * (1 - a^n) / (1 - a)
-        // 
+        //
         // Of course, division isn't defined in our group so we need
         // to use the multiplicative inverse which we helpfully used
         // in part 1 as well.
@@ -156,14 +156,14 @@ impl Deck {
         //
         // Carefully applying mod after each step to hopefully avoid
         // overflow (and importing a bigint module).
-        
+
         let new_step = pow_mod(self.step, n, self.size);
-        
+
         let num = (1 - new_step).rem_euclid(self.size);
         let den = (1 - self.step).rem_euclid(self.size);
         let den_inv = multiplicative_inverse_mod(den, self.size);
         let ratio = (num * den_inv).rem_euclid(self.size);
-        
+
         let new_offset = (self.offset * ratio).rem_euclid(self.size);
 
         self.step = new_step;
@@ -206,7 +206,7 @@ fn input() -> String {
 fn do_part1(input: &str) -> AdventResult {
     let mut deck = Deck::new(PART1_DECK_SIZE);
     deck.run_program(input);
-    
+
     // what is the position of card 2019
     let mut n = 0;
     while deck.nth(n) != 2019 {
