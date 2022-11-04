@@ -104,7 +104,7 @@ impl Computer {
             .map(|c| Intcode::from(u8::try_from(c).unwrap()))
             .collect()
     }
-    
+
     pub fn intcodes_to_ascii<I>(intcodes: I) -> String
     where
         I: Iterator<Item = Intcode>,
@@ -113,7 +113,7 @@ impl Computer {
             .map(|n| char::from(u8::try_from(n).unwrap()))
             .collect()
     }
-    
+
     pub fn parse_program(prog: &str) -> Vec<Intcode> {
         prog.trim().split(",").map(|s| s.parse().unwrap()).collect()
     }
